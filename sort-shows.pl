@@ -54,6 +54,10 @@ $DOWNLOAD_DIR = '/Downloads';
 $TVSHOWS_DIR = '/Videos/TV Shows';
 $MOVIES_DIR = '/Videos/Movies';
 
+# Admin information for error reporting
+$ADMIN_EMAIL = 'you@example.com';
+$EMAIL_FROM  = 'sort-shows@example.com';
+
 # Run the script at an interval using cron. This example will check for new
 # shows every 10 minutes and log the output of the script to /var/log.
 #
@@ -89,11 +93,13 @@ find ( {wanted => sub {
 	}, $DOWNLOAD_DIR );
 
 $movedFiles = 0;
+$errorFiles = 0;
+$errorMessages = "";
 
 foreach $fullpath (@files) {
   #commented out in order to allow 720p videos
   #if( $fullpath =~ m/([-._ \w]+)[-._ ]S(\d{1,2})E(\d{1,2})[-._ ](?!720p)(.*)$/i ) {
-  if( $fullpath =~ m/([-._ \w]+)[-._ ]S(\d{1,2})E(\d{1,2})[-._ ](.*\.avi)$/i ) {
+  if( $fullpath =~ m/([-._ \w]+)[-._ ]S(\d{1,2})E(\d{1,2})[-._ ]([^\/]*\.(?:avi|mp4))$/i ) {
 
 	### Get Season number, turn to variable, then create a padded string
 	### for output later.
@@ -137,11 +143,11 @@ foreach $fullpath (@files) {
 	$destinationPath = "$TVSHOWS_DIR/" . $dirShowname . "/" . $showname . " - Season " . $season;
 	$destinationFile = "" . $destinationPath . "/" . $fileShowname . ".S" . $padSeason . "E" . $padEpisode . "." . $restOfFile;
 
-	print "Moving " . $fullpath . " to " . $destinationFile . "...";
+	print "Moving " . $fullpath . " to " . $destinationFile . "...\n";
 
 
 	### Create the new directory tree if needed
-	File::Copy::Recursive::pathmk( '' . $destinationPath ) or die "\nFailed to create destination directory: " . $destinationPath . ".\n";
+	File::Copy::Recursive::pathmk( '' . $destinationPath ) or die "\nFailed to create destination directory: " . $destinationPath . ".\n\n";
 
 	### Move the files to their new organized directory structure.
 	### This function created directories as needed.
@@ -158,14 +164,17 @@ foreach $fullpath (@files) {
 	$fullpath_escaped =~ s/\(/\\\(/g;
 	$fullpath_escaped =~ s/\)/\\\)/g;
 	$fullpath_escaped =~ s/\'/\\\'/g;
-	system( "/bin/mv " . $fullpath_escaped . " " . $destinationFile_escaped ) == 0 or print "\nFailed to move " . $fullpath . " to " . $destinationFile . ".\n";
+	$result = system( "/bin/mv " . $fullpath_escaped . " " . $destinationFile_escaped );
 	wait();
+	if( $result == 0 ) {
+		$movedFiles = $movedFiles + 1;
+	} else {
+		$errorFiles = $errorFiles + 1;
+		print "\nERROR: Failed to move " . $fullpath . " to " . $destinationFile . ".\n\n";
+		$errorMessages = $errorMessages . "\nERROR: Failed to move " . $fullpath . " to " . $destinationFile . ".\n";
 
+	}
 
-	
-	print "Succeeded.\n";
-
-	$movedFiles = $movedFiles + 1;
 
 	### For Debugging
 	#print $destinationFile . "\n";
@@ -186,19 +195,41 @@ foreach $fullpath (@files) {
 		$fullpath_escaped =~ s/\(/\\\(/g;
 		$fullpath_escaped =~ s/\)/\\\)/g;
 		print "Moving " . $fullpath . " to " . $destinationFile . "...";
-		system( "/bin/mv " . $fullpath_escaped . " " . $destinationFile ) == 0 or print "\nFailed to move " . $fullpath . " to " . $destinationFile . ".\n";
+		$result = system( "/bin/mv " . $fullpath_escaped . " " . $destinationFile );
 		wait();
 
-		print "Succeeded.\n";
-
-		$movedFiles = $movedFiles + 1;
+		if( $result == 0 ) {
+			$movedFiles = $movedFiles + 1;
+		} else {
+			$errorFiles = $errorFiles + 1;
+			print "\nERROR: Failed to move " . $fullpath . " to " . $destinationFile . ".\n\n";
+			$errorMessages = $errorMessages . "\nERROR: Failed to move " . $fullpath . " to " . $destinationFile . ".\n";
+		}
 	}
   }
 } 
 
-if( $movedFiles >= 1 ) {
-	print "Updateing library.\n";
+
+if( $movedFiles > 0 ) {
+	print "Finished.\n";
+	print "Updating library at $XBMC_URL.\n";
 	#Update the library on XBMC remotely via webservice
 	system( "/usr/bin/wget -O /dev/null \"$XBMC_URL/xbmcCmds/xbmcHttp?command=ExecBuiltIn&parameter=XBMC.updatelibrary(video)\" 2>/dev/null 1>/dev/null" );
 	wait();
+}
+if( $errorFiles > 0) {
+	print "Sending errors to $ADMIN_EMAIL\n";
+
+	# send email to administrator using UNIX/Linux sendmail
+	open(MAIL, "|/usr/sbin/sendmail -t") or die "Cannot open sendmail\n";
+
+	## Mail Header
+	print MAIL "To: $ADMIN_EMAIL\n";
+	print MAIL "From: $EMAIL_FROM\n";
+	print MAIL "Subject: sort-shows.pl error\n";
+
+	## Mail Body
+	print MAIL $errorMessages;
+
+	close(MAIL);
 }
